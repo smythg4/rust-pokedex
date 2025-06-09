@@ -48,12 +48,15 @@ impl Cache {
         guard.get(key).cloned()
     }
 
-    pub fn add_cache(&mut self, key: &str, value: &str) {
-        let mut guard = self.cache.lock().unwrap();
+    pub fn add_cache(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let mut guard = self.cache.lock()
+            .map_err(|_| "failed to acquire cache mutex lock")?;
+        
         guard.entry(key.to_string())
             .or_insert_with( || CacheEntry {
                 created_at: SystemTime::now(),
                 data: value.to_string(),
             });
+        Ok(())
     }
 }

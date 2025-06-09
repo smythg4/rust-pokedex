@@ -15,9 +15,15 @@ struct LocationAreas {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct LocationArea {
+pub struct LocationArea {
     name: String,
     url: String,
+}
+
+impl LocationArea {
+    pub fn get_name(&self) -> &str {
+        &self.name
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -74,13 +80,20 @@ pub struct CliCommand {
     pub callback: fn(&mut Config, &Vec<String>) -> Result<(), Box<dyn std::error::Error>>,
 }
 
+#[derive(Clone, Eq, PartialEq)]
+pub enum Mode {
+    LocationListing,
+    PokemonListing,
+}
 pub struct Config {
     next: Option<String>,
     previous: Option<String>,
-    current: Option<String>,
     command_registry: HashMap<String, CliCommand>,
     cache: Cache,
     pokedex: HashMap<String, PokemonDetails>,
+    mode: Option<Mode>,
+    current_locations: Vec<LocationArea>,
+    current_pokemon: Vec<String>,
 }
 
 impl Config {
@@ -88,15 +101,29 @@ impl Config {
         Config {
             next: None,
             previous: None,
-            current: None,
             command_registry: Config::command_registry(),
-            cache: Cache::new(Duration::new(30,0)),
+            cache: Cache::new(Duration::new(60,0)),
             pokedex: HashMap::new(),
+            mode: None,
+            current_locations: Vec::new(),
+            current_pokemon: Vec::new(),
         }
+    }
+
+    pub fn get_current_locations(&self) -> &Vec<LocationArea> {
+        &self.current_locations
+    }
+
+    pub fn get_current_pokemon(&self) -> &Vec<String> {
+        &self.current_pokemon
     }
 
     pub fn get_commands(&self) -> &HashMap<String, CliCommand> {
         &self.command_registry
+    }
+
+    pub fn get_mode(&self) -> Option<Mode> {
+        self.mode.clone()
     }
 
     fn command_registry() -> HashMap<String, CliCommand> {
@@ -165,19 +192,21 @@ fn command_map(config: &mut Config, _params: &Vec<String>) -> Result<(), Box<dyn
     }
     else {
         let mut res = reqwest::blocking::get(url.clone())?;
-        res.read_to_string(&mut body).unwrap(); 
-        config.cache.add_cache(&url, &body);
+        res.read_to_string(&mut body)?; 
+        config.cache.add_cache(&url, &body)?;
     }
 
-    let la: LocationAreas = serde_json::from_str(&body).unwrap();
+    let la: LocationAreas = serde_json::from_str(&body)?;
 
-    config.current = Some(url);
     config.next = Some(la.next);
     config.previous = la.previous.map(|url| url.clone());
 
+    config.current_locations.drain(..);
     for location in la.results {
         println!(" {}", location.name);
+        config.current_locations.push(location);
     }
+    config.mode = Some(Mode::LocationListing);
     Ok(())
 }
 
@@ -195,82 +224,88 @@ fn command_mapb(config: &mut Config, _params: &Vec<String>) -> Result<(), Box<dy
     }
     else {
         let mut res = reqwest::blocking::get(url.clone())?;
-        res.read_to_string(&mut body).unwrap(); 
-        config.cache.add_cache(&url, &body);
+        res.read_to_string(&mut body)?; 
+        config.cache.add_cache(&url, &body)?;
     }
     
-    let la: LocationAreas = serde_json::from_str(&body).unwrap();
+    let la: LocationAreas = serde_json::from_str(&body)?;
 
-    config.current = Some(url);
     config.next = Some(la.next);
     config.previous = la.previous.map(|url| url.clone());
 
+    config.current_locations.drain(..);
     for location in la.results {
         println!(" {}", location.name);
+        config.current_locations.push(location);
     }
+    config.mode = Some(Mode::LocationListing);
     Ok(())
 }
 
 fn command_explore(config: &mut Config, params: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(loc) = params.first() {
-        println!("Searching for Pokemon in {}", loc);
+        println!("Searching for Pokemon in {}\r\r", loc);
 
-        let url = format!("{}{}",config.current.clone().unwrap(), loc);
+        let url = format!("https://pokeapi.co/api/v2/location-area/{}/", loc);
         let mut body = String::new();
         if let Some(cached) = config.cache.get_cache(&url) { 
-            println!("Using cached data...");
+            println!("Using cached data...\r");
             body = cached.data;
         }
         else {
             let mut res = reqwest::blocking::get(url.clone())?;
-            res.read_to_string(&mut body).unwrap(); 
-            config.cache.add_cache(&url, &body);
+            res.read_to_string(&mut body)?; 
+            config.cache.add_cache(&url, &body)?;
         }
 
-        let lad: LocationAreaDetail = serde_json::from_str(&body).unwrap();
+        let lad: LocationAreaDetail = serde_json::from_str(&body)?;
         let pokemon: Vec<_> = lad.pokemon_encounters.iter().map(|pe| &pe.pokemon.name).collect();
-        println!("Found Pokemon:");
+        println!("Found Pokemon:\r");
+
+        config.current_pokemon.drain(..);
         for p in pokemon {
-            println!(" - {}", p);
+            println!(" - {}\r", p);
+            config.current_pokemon.push(p.to_string());
         }
     }
     else {
         println!("No location entered to explore...")
     }
+    config.mode = Some(Mode::PokemonListing);
     Ok(())
 }
 
 fn command_catch(config: &mut Config, params: &Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(pname) = params.first() {
-        println!("Throwing a Pokeball at {}", pname);
+        println!("Throwing a Pokeball at {}\r\r", pname);
         let base_url = "https://pokeapi.co/api/v2/pokemon/";  // PokeAPI Pokemon endpoint
         let full_url = format!("{}{}", base_url, pname);
 
         let mut body = String::new();
         if let Some(cached) = config.cache.get_cache(&full_url) {
-            println!("Using cached data...");
+            println!("Using cached data...\r");
             body = cached.data;
         }
         else {
             let mut res = reqwest::blocking::get(full_url.clone())?;
-            res.read_to_string(&mut body).unwrap();
-            config.cache.add_cache(&full_url, &body);
+            res.read_to_string(&mut body)?;
+            config.cache.add_cache(&full_url, &body)?;
         }
 
-        let pdetails: PokemonDetails = serde_json::from_str(&body).unwrap();
+        let pdetails: PokemonDetails = serde_json::from_str(&body)?;
 
         let mut rng = rand::rng();
         let r = (0..350).choose(&mut rng).unwrap();
         if r > pdetails.base_experience {
-            println!("You caught {}!", pdetails.name);
+            println!("You caught {}!\r", pdetails.name);
             config.pokedex.entry(pdetails.name.clone()).or_insert(pdetails);
         }
         else {
-            println!("You failed to catch {}... {}, {}", pdetails.name, r, pdetails.base_experience);
+            println!("You failed to catch {}... {}, {}\r", pdetails.name, r, pdetails.base_experience);
         }
     }
     else {
-        println!("No Pokemon name entered to try and catch...")
+        println!("No Pokemon name entered to try and catch...\r")
     }
     Ok(())
 }
